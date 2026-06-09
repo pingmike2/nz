@@ -11,7 +11,7 @@
 | 变量名                 | 示例值                             | 必填 | 说明                                                                               |
 | ------------------- | ------------------------------- | -- | -------------------------------------------------------------------------------- |
 | `ARGO_AUTH`         | `eyJhIjoi.......`               | ✅  | Argo Tunnel 认证 Token，从 [Cloudflare Tunnels](https://one.dash.cloudflare.com/) 获取 |
-| `ARGO_DOMAIN`       | `nezha.loc.cc`                  | ✅  | 面板访问域名，同时用于探针上报                                                                  |
+| `ARGO_DOMAIN`       | `nezha.com`                  | ✅  | 面板访问域名，同时用于探针上报                                                                  |
 | `GITHUB_TOKEN`      | `ghp_xxxxxxxx`                  | ✅  | GitHub Token，用于配置文件自动备份到 GitHub                                                  |
 | `GITHUB_REPO_OWNER` | `your_username`                 | ✅  | 备份仓库所有者                                                                          |
 | `GITHUB_REPO_NAME`  | `nezha-backup`                  | ✅  | 存储配置备份的仓库名称                                                                      |
