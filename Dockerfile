@@ -1,36 +1,31 @@
 # ==========================
-# 构建阶段：拉取哪吒面板
+# 运行阶段：Nginx + 工具环境（基于 Debian）
 # ==========================
-FROM ghcr.io/nezhahq/nezha AS app
+FROM nginx:latest
 
-# ==========================
-# 运行阶段：Nginx + 工具环境
-# ==========================
-FROM nginx:alpine
-
-# 安装依赖
-RUN apk add --no-cache \
-    wget \
-    unzip \
-    bash \
-    curl \
-    git \
-    tar \
-    openssl \
-    jq \
-    procps \
-    tzdata \
-    zip \
-    sqlite \
-    sqlite-libs
-
-# 复制 cloudflared
-COPY --from=cloudflare/cloudflared:latest /usr/local/bin/cloudflared /usr/local/bin/cloudflared
-
-# 复制 SSL 证书（避免证书问题）
-COPY --from=app /etc/ssl/certs /etc/ssl/certs
+# 更新源并安装依赖（含 cron）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        wget \
+        unzip \
+        bash \
+        curl \
+        git \
+        tar \
+        openssl \
+        jq \
+        procps \
+        tzdata \
+        zip \
+        sqlite3 \
+        libsqlite3-dev \
+        python3 \
+        ca-certificates \
+        cron && \
+    rm -rf /var/lib/apt/lists/*
 
 # Nginx 配置
+COPY nginx.conf /etc/nginx/nginx.conf
 COPY main.conf /etc/nginx/conf.d/main.conf
 RUN rm -f /etc/nginx/conf.d/default.conf
 COPY ssl.conf.template /etc/nginx/ssl.conf.template
@@ -41,8 +36,17 @@ ENV TZ=Asia/Shanghai
 # 工作目录
 WORKDIR /dashboard
 
-# 复制哪吒面板 app
-COPY --from=app /dashboard/app /dashboard/app
+# 下载哪吒面板（从 GitHub Release 获取 glibc 二进制）
+ARG DASHBOARD_VERSION=latest
+RUN if [ "$DASHBOARD_VERSION" = "latest" ]; then \
+        DASHBOARD_VERSION=$(curl -s https://api.github.com/repos/nezhahq/nezha/releases/latest | jq -r .tag_name); \
+    fi && \
+    echo "Dashboard version: $DASHBOARD_VERSION" && \
+    wget -q "https://github.com/nezhahq/nezha/releases/download/${DASHBOARD_VERSION}/dashboard-linux-amd64.zip" -O /tmp/dashboard.zip && \
+    unzip -qo /tmp/dashboard.zip -d /tmp/dashboard && \
+    mv /tmp/dashboard/dashboard-linux-amd64 /dashboard/app && \
+    chmod +x /dashboard/app && \
+    rm -rf /tmp/dashboard /tmp/dashboard.zip
 
 # 数据目录并设置权限
 RUN mkdir -p /dashboard/data && chmod -R 777 /dashboard
@@ -50,7 +54,7 @@ RUN mkdir -p /dashboard/data && chmod -R 777 /dashboard
 # 暴露端口
 EXPOSE 8008
 
-# 环境变量
+# 环境变量（敏感信息建议运行时注入）
 ENV ARGO_DOMAIN="" \
     ARGO_AUTH="" \
     GITHUB_TOKEN="" \
@@ -61,16 +65,17 @@ ENV ARGO_DOMAIN="" \
     NZ_CLIENT_SECRET="" \
     NZ_UUID="" \
     NZ_TLS="" \
-    DASHBOARD_VERSION="" 
+    DASHBOARD_VERSION=""
 
 # 复制脚本和静态文件
 COPY restore.sh /restore.sh
 COPY backup.sh /backup.sh
 COPY entrypoint.sh /entrypoint.sh
+COPY start_cloudflared.py /start_cloudflared.py
 COPY index.html /usr/share/nginx/html/index.html
 
 # 设置可执行权限
-RUN chmod +x /restore.sh /backup.sh /entrypoint.sh
+RUN chmod +x /restore.sh /backup.sh /entrypoint.sh /start_cloudflared.py
 
 # 启动脚本
 CMD ["/entrypoint.sh"]
