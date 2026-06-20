@@ -2,7 +2,7 @@ name: ♻️ 同步上游动态库
 
 on:
   schedule:
-    - cron: '0 2 * * *'          # 每天 UTC 2:00
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
@@ -10,46 +10,46 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # 新增 freebsd 平台
         arch: [amd64, arm64, freebsd]
         lib: [sbx, bot, agent, v1]
       fail-fast: false
     steps:
       - name: 下载 ${{ matrix.lib }}-${{ matrix.arch }}.so 并生成 SHA256
         id: dl
+        continue-on-error: true          # ← 核心修复：失败不打断
         run: |
           FILENAME="${{ matrix.lib }}-${{ matrix.arch }}.so"
 
-          # ── 按平台选择上游 URL ──────────────────────────────────────
           case "${{ matrix.arch }}" in
-            amd64)
-              URL="https://amd64.31888.xyz/${{ matrix.lib }}.so"
-              ;;
-            arm64)
-              URL="https://arm64.31888.xyz/${{ matrix.lib }}.so"
-              ;;
-            freebsd)
-              # FreeBSD 专用上游
-              URL="https://00.ssss.nyc.mn/freebsd-${{ matrix.lib }}.so"
-              ;;
+            amd64)   URL="https://amd64.31888.xyz/${{ matrix.lib }}.so" ;;
+            arm64)   URL="https://arm64.31888.xyz/${{ matrix.lib }}.so" ;;
+            freebsd) URL="https://00.ssss.nyc.mn/freebsd-${{ matrix.lib }}.so" ;;
           esac
 
           echo "Downloading $URL → $FILENAME"
-          curl -fSL --retry 3 --retry-delay 5 -o "$FILENAME" "$URL"
 
-          SHA=$(sha256sum "$FILENAME" | awk '{print $1}')
-          echo "sha256=$SHA"
-          echo "sha256=$SHA"    >> $GITHUB_OUTPUT
-          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
-          echo "$SHA" > "${FILENAME}.sha256"
+          if curl -fSL --retry 3 --retry-delay 5 -o "$FILENAME" "$URL"; then
+            SHA=$(sha256sum "$FILENAME" | awk '{print $1}')
+            echo "sha256=$SHA"
+            echo "sha256=$SHA"        >> $GITHUB_OUTPUT
+            echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+            echo "$SHA" > "${FILENAME}.sha256"
+            echo "success=true"       >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ 下载失败，跳过：$URL"
+            echo "success=false"      >> $GITHUB_OUTPUT
+            # 不以非零退出，让 continue-on-error 生效
+          fi
 
       - name: 上传 .so 文件
+        if: steps.dl.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: so-${{ matrix.lib }}-${{ matrix.arch }}
           path: ${{ steps.dl.outputs.filename }}
 
       - name: 上传 SHA256 文件
+        if: steps.dl.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sha-${{ matrix.lib }}-${{ matrix.arch }}
@@ -81,18 +81,17 @@ jobs:
         run: |
           echo '{}' > current_sha.json
           for sha_file in sha-files/*.sha256; do
+            [ -f "$sha_file" ] || continue
             fname=$(basename "$sha_file" .sha256)
             hash=$(cat "$sha_file")
             jq --arg name "$fname" --arg hash "$hash" \
               '.[$name] = $hash' current_sha.json > tmp.json \
               && mv tmp.json current_sha.json
           done
-          # 按 key 排序，保证比较时顺序一致
           jq -S '.' current_sha.json > sorted.json && mv sorted.json current_sha.json
           echo "=== 当前哈希 ==="
           cat current_sha.json
 
-      # ── BUG 修复核心：改用 gh release download 获取已发布的 JSON 文件 ──
       - name: 读取旧 Release 哈希（若存在）
         id: old_release
         env:
@@ -100,14 +99,11 @@ jobs:
         run: |
           mkdir -p prev_assets
 
-          # 优先尝试下载我们专门上传的 sha256_index.json 文件
-          # 比从 Markdown body 解析可靠得多
           if gh release download so-files-latest \
                --pattern "sha256_index.json" \
                --dir prev_assets \
                --clobber 2>/dev/null; then
 
-            # 同样排序后再比较
             jq -S '.' prev_assets/sha256_index.json > prev_sha.json 2>/dev/null \
               || echo '{}' > prev_sha.json
 
@@ -116,7 +112,6 @@ jobs:
             cat prev_sha.json
 
           else
-            # 首次发布 / Release 不存在
             echo '{}' > prev_sha.json
             echo "RELEASE_EXISTS=false" >> $GITHUB_OUTPUT
             echo "未找到已有 Release，将执行首次发布"
@@ -125,7 +120,6 @@ jobs:
       - name: 判断是否需要更新
         id: compare
         run: |
-          # jq 比较两个已排序的 JSON 对象
           SAME=$(jq -n \
             --slurpfile cur  current_sha.json \
             --slurpfile prev prev_sha.json \
@@ -138,7 +132,6 @@ jobs:
             echo "changed=true"  >> $GITHUB_OUTPUT
             echo "📦 检测到文件变化，将更新 Release"
             echo "--- 变动详情 ---"
-            # 打印新增/变更的条目
             jq -n \
               --slurpfile cur  current_sha.json \
               --slurpfile prev prev_sha.json \
@@ -158,14 +151,13 @@ jobs:
 
           | 平台 | 上游地址 |
           |------|---------|
-          | amd64 | `https://amd64.31888.xyz/` |
-          | arm64 | `https://arm64.31888.xyz/` |
+          | amd64   | `https://amd64.31888.xyz/` |
+          | arm64   | `https://arm64.31888.xyz/` |
           | freebsd | `https://00.ssss.nyc.mn/freebsd-*.so` |
 
           BODYEOF
           echo "更新时间：$TIMESTAMP" >> release-body.md
 
-      # 将 sha256_index.json 也打包进 Release assets，下次直接下载比较
       - name: 准备发布产物
         if: steps.compare.outputs.changed == 'true'
         run: |
