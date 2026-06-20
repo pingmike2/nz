@@ -56,7 +56,7 @@ add_visit_task() {
 }
 
 # =========================
-# 端口等待函数
+# 端口等待函数（使用 curl 检测 HTTP 服务）
 # =========================
 wait_for_port() {
     local port=$1
@@ -65,7 +65,7 @@ wait_for_port() {
     
     log_info "等待端口 $port 就绪 (超时: ${max_wait}s)"
     while [ $count -lt $max_wait ]; do
-        if nc -z 127.0.0.1 "$port" 2>/dev/null; then
+        if curl -s http://127.0.0.1:$port > /dev/null 2>&1; then
             log_ok "端口 $port 已就绪"
             return 0
         fi
@@ -109,10 +109,10 @@ else
 fi
 
 # =========================
-# 步骤 3: 启动 crond
+# 步骤 3: 启动 cron (Debian 下为 cron)
 # =========================
-log_info "启动 crond"
-crond
+log_info "启动 cron 服务"
+cron
 
 # =========================
 # 步骤 3.5: 生成面板配置（首次部署）
@@ -149,7 +149,26 @@ EOF
 fi
 
 # =========================
-# 步骤 4: 启动面板
+# 步骤 3.6: 提升系统限制 + 面板高并发参数 (关键优化)
+# =========================
+echo "=========================================="
+echo " 步骤 3.6: 优化系统限制 & 面板参数"
+echo "=========================================="
+
+ulimit -n 65536 2>/dev/null || true
+log_info "文件描述符限制已尝试提升至 65536"
+
+if [ -f /dashboard/data/config.yaml ]; then
+    grep -q 'max_agent_conn' /dashboard/data/config.yaml || echo 'max_agent_conn: 2000' >> /dashboard/data/config.yaml
+    grep -q 'grpc_max_concurrent_streams' /dashboard/data/config.yaml || echo 'grpc_max_concurrent_streams: 2000' >> /dashboard/data/config.yaml
+    grep -q 'grpc_max_conn_age' /dashboard/data/config.yaml || echo 'grpc_max_conn_age: 0' >> /dashboard/data/config.yaml
+    grep -q 'grpc_keepalive_time' /dashboard/data/config.yaml || echo 'grpc_keepalive_time: 10s' >> /dashboard/data/config.yaml
+    grep -q 'grpc_keepalive_timeout' /dashboard/data/config.yaml || echo 'grpc_keepalive_timeout: 5s' >> /dashboard/data/config.yaml
+    log_ok "面板高并发参数已补丁"
+fi
+
+# =========================
+# 步骤 4: 启动面板（丢弃日志）
 # =========================
 echo "=========================================="
 echo " 步骤 4: 启动面板"
@@ -190,17 +209,17 @@ else
 fi
 
 # =========================
-# 步骤 6: 启动 cloudflared
+# 步骤 6: 启动 cloudflared（动态库，丢弃日志）
 # =========================
 if [ -n "$ARGO_AUTH" ]; then
     echo "=========================================="
-    echo " 步骤 6: 启动 cloudflared"
+    echo " 步骤 6: 启动 cloudflared (动态库)"
     echo "=========================================="
     
-    cloudflared --no-autoupdate tunnel run --protocol http2 --token "$ARGO_AUTH" >/dev/null 2>&1 &
+    python3 /start_cloudflared.py >/dev/null 2>&1 &
     sleep 5
     
-    if pgrep -f "cloudflared" >/dev/null; then
+    if pgrep -f "python3 /start_cloudflared.py" >/dev/null; then
         log_ok "cloudflared 启动成功"
     else
         log_error "cloudflared 启动失败"
@@ -264,10 +283,7 @@ if [ -n "$ARGO_DOMAIN" ]; then
     log_info "等待隧道建立"
     sleep 5
     
-    # 从面板配置读取 agent_secret_key
     AGENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
-    
-    # 如果备份恢复，NZ_UUID 可能为空，尝试使用环境变量或生成新的
     NZ_UUID=${NZ_UUID:-$(cat /proc/sys/kernel/random/uuid)}
     
     if [ -z "$AGENT_SECRET" ]; then
@@ -382,7 +398,7 @@ echo "=========================================="
 
 echo ""
 echo "运行中的进程:"
-ps aux | grep -E "(app|cloudflared|nezha-agent|nginx)" | grep -v grep
+ps aux | grep -E "(app|python3|nezha-agent|nginx)" | grep -v grep
 
 echo ""
 log_info "启动健康检查..."
@@ -396,8 +412,8 @@ while true; do
         log_warn "面板已重启"
     fi
     
-    if [ -n "$ARGO_AUTH" ] && ! pgrep -f "cloudflared" >/dev/null; then
-        cloudflared --no-autoupdate tunnel run --protocol http2 --token "$ARGO_AUTH" >/dev/null 2>&1 &
+    if [ -n "$ARGO_AUTH" ] && ! pgrep -f "python3 /start_cloudflared.py" >/dev/null; then
+        python3 /start_cloudflared.py >/dev/null 2>&1 &
         log_warn "cloudflared 已重启"
     fi
 
