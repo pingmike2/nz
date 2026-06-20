@@ -24,8 +24,6 @@ jobs:
           SHA=$(sha256sum "$FILENAME" | awk '{print $1}')
           echo "sha256=$SHA" >> $GITHUB_OUTPUT
           echo "filename=$FILENAME" >> $GITHUB_OUTPUT
-
-          # 生成 .sha256 文件（用于后续汇总）
           echo "$SHA" > "${FILENAME}.sha256"
 
       - name: 上传 .so 文件
@@ -76,7 +74,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view so-files-latest --json body --jq '.body' > release_body.md 2>/dev/null; then
-            # 提取 JSON 代码块（```json ... ```）
             sed -n '/```json/,/```/p' release_body.md | sed '1d;$d' > prev_sha.json
             if [ ! -s prev_sha.json ]; then
               echo '{}' > prev_sha.json
@@ -92,20 +89,17 @@ jobs:
       - name: 判断是否需要更新
         id: compare
         run: |
-          # 比较两个 JSON 是否相同（忽略键顺序，但 jq 的 == 会考虑顺序，所以用 --argjson 传递对象比较）
-          DIFF=$(jq -n --slurpfile cur current_sha.json --slurpfile prev prev_sha.json \
-            '$cur[0] == $prev[0] | not')
+          # 直接用 jq 比较两个 JSON 对象是否完全相等
+          DIFF=$(jq -n --slurpfile cur current_sha.json --slurpfile prev prev_sha.json '$cur[0] == $prev[0] | not')
           if [ "$DIFF" = "true" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "文件发生变化，准备更新 Release"
-            # 记录变化详情（可选）
-            jq -n --slurpfile cur current_sha.json --slurpfile prev prev_sha.json \
-              '{added: ($cur[0] | keys) - ($prev[0] | keys),
-               removed: ($prev[0] | keys) - ($cur[0] | keys),
-               changed: ($cur[0] | to_entries | map(select(.value != $prev[0][.key]))) }'
+            echo "📦 文件发生变化，将更新 Release"
+            # 简单地输出文件名列表（不执行可能出错的 jq 高级操作）
+            echo "当前文件列表："
+            jq -r 'keys[]' current_sha.json
           else
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "所有文件与上次 Release 一致，跳过发布"
+            echo "✅ 所有文件与上次 Release 一致，跳过发布"
           fi
 
       - name: 生成 Release body
@@ -136,4 +130,4 @@ jobs:
 
       - name: 无变化提示
         if: steps.compare.outputs.changed != 'true'
-        run: echo "✅ 本次检查无更新，无需发布新 Release"
+        run: echo "本次检查无更新，无需发布新 Release"
