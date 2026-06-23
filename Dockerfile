@@ -55,17 +55,7 @@ RUN mkdir -p /dashboard/data && chmod -R 777 /dashboard
 EXPOSE 8008
 
 # 环境变量（敏感信息建议运行时注入）
-ENV ARGO_DOMAIN="" \
-    ARGO_AUTH="" \
-    GITHUB_TOKEN="" \
-    GITHUB_REPO_OWNER="" \
-    GITHUB_REPO_NAME="" \
-    GITHUB_BRANCH="" \
-    ZIP_PASSWORD="" \
-    NZ_CLIENT_SECRET="" \
-    NZ_UUID="" \
-    NZ_TLS="" \
-    DASHBOARD_VERSION=""
+ENV TZ=Asia/Shanghai
 
 # 复制脚本和静态文件
 COPY restore.sh /restore.sh
