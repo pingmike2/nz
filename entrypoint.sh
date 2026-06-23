@@ -326,56 +326,58 @@ else
     log_warn "未设置 ARGO_DOMAIN，跳过探针"
 fi
 
-# =========================
-# 步骤 9: 启动备份守护进程
-# =========================
+echo "=========================================="
+echo " 步骤 9: 启动备份系统（稳定版）"
+echo "=========================================="
+
 if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_NAME" ]; then
-    echo "=========================================="
-    echo " 步骤 9: 启动备份守护进程"
-    echo "=========================================="
-    
-    (
-        API_BASE="https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME"
-        BACKUP_HOUR=${BACKUP_HOUR:-4}
-        
-        while true; do
-            current_date=$(date +"%Y-%m-%d")
-            current_hour=$(date +"%H")
-            
-            readme_content=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-                "$API_BASE/contents/README.md?ref=$GITHUB_BRANCH" \
-                | jq -r '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || echo "")
-            
-            should_backup=false
-            backup_reason=""
-            
-            if [ "$readme_content" = "backup" ]; then
-                should_backup=true
-                backup_reason="手动触发"
-            else
-                latest_backup=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-                    "$API_BASE/contents?ref=$GITHUB_BRANCH" \
-                    | jq -r '.[].name' 2>/dev/null | grep '^data-.*\.zip$' | sort -r | head -n1)
-                file_date=$(echo "$latest_backup" | sed -n 's/^data-\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)-.*\.zip$/\1/p')
-                
-                if [ "$current_hour" -eq "$BACKUP_HOUR" ] && [ "$file_date" != "$current_date" ]; then
-                    should_backup=true
-                    backup_reason="定时备份 (${BACKUP_HOUR}:00)"
-                fi
-            fi
-            
-            if [ "$should_backup" = "true" ]; then
-                echo "$(date): 触发备份 - $backup_reason"
-                [ -f "/backup.sh" ] && /backup.sh
-            fi
-            
-            sleep 3600
-        done
-    ) &
-    
-    log_ok "备份守护进程已启动"
+
+    API_BASE="https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME"
+    BACKUP_HOUR=${BACKUP_HOUR:-4}
+
+    # =========================
+    # 1. 定时备份（每天）
+    # =========================
+    echo "0 $BACKUP_HOUR * * * /backup.sh >> /var/log/backup.log 2>&1" > /tmp/cronjob
+
+    # =========================
+    # 2. 每分钟检测 README 手动触发
+    # =========================
+    cat >> /tmp/cronjob <<'EOF'
+* * * * * /bin/bash -c '
+API="https://api.github.com/repos/'"$GITHUB_REPO_OWNER"'/'"$GITHUB_REPO_NAME"'"
+CONTENT=$(curl -s -H "Authorization: token '"$GITHUB_TOKEN"'" "$API/contents/README.md" | jq -r .content 2>/dev/null | base64 -d 2>/dev/null)
+
+if echo "$CONTENT" | grep -qi "backup"; then
+    echo "$(date): 手动触发备份" >> /var/log/backup.log
+
+    /backup.sh
+
+    # 重置 README（防止死循环）
+    RESET=$(echo "done" | base64 -w 0 2>/dev/null || echo "done" | base64)
+
+    SHA=$(curl -s -H "Authorization: token '"$GITHUB_TOKEN"'" "$API/contents/README.md" | jq -r .sha)
+
+    curl -s -X PUT \
+        -H "Authorization: token '"$GITHUB_TOKEN"'" \
+        -H "Content-Type: application/json" \
+        -d "{\"message\":\"reset trigger\",\"content\":\"$RESET\",\"sha\":\"$SHA\"}" \
+        "$API/contents/README.md" >/dev/null
+fi
+'
+EOF
+
+    # 写入 crontab
+    crontab /tmp/cronjob
+    rm -f /tmp/cronjob
+
+    # 启动 cron（前台模式，HF 友好）
+    cron
+
+    log_ok "备份系统已启动（cron + README触发）"
+
 else
-    log_warn "GITHUB_TOKEN & GITHUB_REPO_NAME & GITHUB_REPO_OWNER 未设置，跳过备份"
+    log_warn "未配置 GitHub，跳过备份系统"
 fi
 
 # =========================
