@@ -139,9 +139,9 @@ README_TEXT="# Nezha 数据备份
 将此文件内容修改为 \`backup\` 即可触发手动备份。
 
 ## 环境变量
-- \`GITHUB_REPO_OWNER\`: GitHub 用户名
-- \`GITHUB_REPO_NAME\`: GitHub 仓库名称
-- \`GITHUB_TOKEN\`: GitHub Token
+- \`GH_OWNER\`: GitHub 用户名
+- \`GH_REPO\`: GitHub 仓库名称
+- \`GH_TOKEN\`: GitHub Token
 - \`GITHUB_BRANCH\`: GitHub 备份分支
 - \`ZIP_PASSWORD\`: 备份密码
 "
