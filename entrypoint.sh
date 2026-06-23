@@ -329,58 +329,57 @@ else
     log_warn "未设置 ARGO_DOMAIN，跳过探针"
 fi
 
+echo ""
+echo "步骤 9: 启动备份系统（稳定版）"
 echo "=========================================="
-echo " 步骤 9: 启动备份系统（稳定版）"
-echo "=========================================="
 
-if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_NAME" ]; then
+# 映射 HF 变量（防止 TOKEN 被拦）
+export GITHUB_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
+export GITHUB_REPO_OWNER="${GH_OWNER:-$GITHUB_REPO_OWNER}"
+export GITHUB_REPO_NAME="${GH_REPO:-$GITHUB_REPO_NAME}"
 
-    API_BASE="https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME"
-    BACKUP_HOUR=${BACKUP_HOUR:-4}
+# 检查必要变量
+if [ -z "$GITHUB_TOKEN" ] || [ -z "$GITHUB_REPO_OWNER" ] || [ -z "$GITHUB_REPO_NAME" ]; then
+    echo "[WARN] $(date '+%F %T') 未配置 GitHub，跳过备份系统"
+else
+    echo "[INFO] $(date '+%F %T') 初始化备份系统..."
 
-    # =========================
-    # 1. 定时备份（每天）
-    # =========================
-    echo "0 $BACKUP_HOUR * * * /backup.sh >> /var/log/backup.log 2>&1" > /tmp/cronjob
+    # ===== 修复 1：写入正确的 cron 格式 =====
+    cat > /tmp/cronjob <<EOF
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-    # =========================
-    # 2. 每分钟检测 README 手动触发
-    # =========================
-    cat >> /tmp/cronjob <<'EOF'
-* * * * * /bin/bash -c '
-API="https://api.github.com/repos/'"$GITHUB_REPO_OWNER"'/'"$GITHUB_REPO_NAME"'"
-CONTENT=$(curl -s -H "Authorization: token '"$GITHUB_TOKEN"'" "$API/contents/README.md" | jq -r .content 2>/dev/null | base64 -d 2>/dev/null)
-
-if echo "$CONTENT" | grep -qi "backup"; then
-    echo "$(date): 手动触发备份" >> /var/log/backup.log
-
-    /backup.sh
-
-    # 重置 README（防止死循环）
-    RESET=$(echo "done" | base64 -w 0 2>/dev/null || echo "done" | base64)
-
-    SHA=$(curl -s -H "Authorization: token '"$GITHUB_TOKEN"'" "$API/contents/README.md" | jq -r .sha)
-
-    curl -s -X PUT \
-        -H "Authorization: token '"$GITHUB_TOKEN"'" \
-        -H "Content-Type: application/json" \
-        -d "{\"message\":\"reset trigger\",\"content\":\"$RESET\",\"sha\":\"$SHA\"}" \
-        "$API/contents/README.md" >/dev/null
-fi
-'
+*/10 * * * * /backup.sh >> /var/log/cron.log 2>&1
 EOF
 
-    # 写入 crontab
-    crontab /tmp/cronjob
-    rm -f /tmp/cronjob
+    # 安装 crontab
+    crontab /tmp/cronjob || {
+        echo "[ERROR] crontab 安装失败"
+        cat /tmp/cronjob
+    }
 
-    # 启动 cron（前台模式，HF 友好）
-    cron
+    # ===== 修复 2：避免重复启动 cron =====
+    if ! pgrep cron > /dev/null; then
+        echo "[INFO] 启动 cron 服务..."
+        cron
+    else
+        echo "[INFO] cron 已在运行，跳过启动"
+    fi
 
-    log_ok "备份系统已启动（cron + README触发）"
+    # ===== 修复 3：README 触发监听 =====
+    (
+        while true; do
+            sleep 60
 
-else
-    log_warn "未配置 GitHub，跳过备份系统"
+            if [ -f "/dashboard/data/trigger_backup" ]; then
+                echo "[INFO] $(date '+%F %T') 检测到手动触发备份"
+                rm -f /dashboard/data/trigger_backup
+                /backup.sh
+            fi
+        done
+    ) &
+
+    echo "[OK] $(date '+%F %T') 备份系统已启动（cron + README触发）"
 fi
 
 # =========================
