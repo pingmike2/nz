@@ -3,6 +3,9 @@
 # =========================
 # 环境变量
 # =========================
+export GITHUB_TOKEN="$GH_TOKEN"
+export GITHUB_REPO_OWNER="$GH_OWNER"
+export GITHUB_REPO_NAME="$GH_REPO"
 ARGO_DOMAIN=${ARGO_DOMAIN:-""}
 ARGO_AUTH=${ARGO_AUTH:-""}
 NZ_UUID=${NZ_UUID:-""}
