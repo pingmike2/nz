@@ -329,57 +329,73 @@ else
     log_warn "未设置 ARGO_DOMAIN，跳过探针"
 fi
 
-echo ""
-echo "步骤 9: 启动备份系统（稳定版）"
-echo "=========================================="
+# =========================
+# 步骤 9: 启动备份守护进程（增强版）
+# =========================
+if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_NAME" ]; then
+    echo "=========================================="
+    echo " 步骤 9: 启动备份守护进程（增强版）"
+    echo "=========================================="
 
-# 映射 HF 变量（防止 TOKEN 被拦）
-export GITHUB_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
-export GITHUB_REPO_OWNER="${GH_OWNER:-$GITHUB_REPO_OWNER}"
-export GITHUB_REPO_NAME="${GH_REPO:-$GITHUB_REPO_NAME}"
-
-# 检查必要变量
-if [ -z "$GITHUB_TOKEN" ] || [ -z "$GITHUB_REPO_OWNER" ] || [ -z "$GITHUB_REPO_NAME" ]; then
-    echo "[WARN] $(date '+%F %T') 未配置 GitHub，跳过备份系统"
-else
-    echo "[INFO] $(date '+%F %T') 初始化备份系统..."
-
-    # ===== 修复 1：写入正确的 cron 格式 =====
-    cat > /tmp/cronjob <<EOF
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-0 4 * * * /backup.sh >> /var/log/cron.log 2>&1
-EOF
-
-    # 安装 crontab
-    crontab /tmp/cronjob || {
-        echo "[ERROR] crontab 安装失败"
-        cat /tmp/cronjob
-    }
-
-    # ===== 修复 2：避免重复启动 cron =====
-    if ! pgrep cron > /dev/null; then
-        echo "[INFO] 启动 cron 服务..."
-        cron
-    else
-        echo "[INFO] cron 已在运行，跳过启动"
-    fi
-
-    # ===== 修复 3：README 触发监听 =====
     (
-        while true; do
-            sleep 60
+        API_BASE="https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME"
+        BACKUP_HOUR=${BACKUP_HOUR:-4}
 
-            if [ -f "/dashboard/data/trigger_backup" ]; then
-                echo "[INFO] $(date '+%F %T') 检测到手动触发备份"
-                rm -f /dashboard/data/trigger_backup
-                /backup.sh
+        LAST_TRIGGER_TIME=0   # 防重复触发（秒）
+        COOLDOWN=300          # 冷却时间（5分钟）
+
+        while true; do
+            now_ts=$(date +%s)
+            current_date=$(date +"%Y-%m-%d")
+            current_hour=$(date +"%H")
+
+            # ===== 获取 README 内容 =====
+            readme_content=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+                "$API_BASE/contents/README.md?ref=${GITHUB_BRANCH:-main}" \
+                | jq -r '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || echo "")
+
+            should_backup=false
+            backup_reason=""
+
+            # ===== 1. README 手动触发 =====
+            if [ "$readme_content" = "backup" ]; then
+                if [ $((now_ts - LAST_TRIGGER_TIME)) -gt $COOLDOWN ]; then
+                    should_backup=true
+                    backup_reason="README触发"
+                    LAST_TRIGGER_TIME=$now_ts
+                fi
+            else
+                # ===== 2. 定时备份 =====
+                latest_backup=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+                    "$API_BASE/contents?ref=${GITHUB_BRANCH:-main}" \
+                    | jq -r '.[].name' 2>/dev/null | grep '^data-.*\.zip$' | sort -r | head -n1)
+
+                file_date=$(echo "$latest_backup" | sed -n 's/^data-\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)-.*\.zip$/\1/p')
+
+                if [ "$current_hour" -eq "$BACKUP_HOUR" ] && [ "$file_date" != "$current_date" ]; then
+                    should_backup=true
+                    backup_reason="定时备份 (${BACKUP_HOUR}:00)"
+                fi
             fi
+
+            # ===== 执行备份 =====
+            if [ "$should_backup" = "true" ]; then
+                echo "[INFO] $(date '+%F %T') 触发备份 - $backup_reason"
+                if [ -f "/backup.sh" ]; then
+                    /backup.sh
+                else
+                    echo "[ERROR] /backup.sh 不存在"
+                fi
+            fi
+
+            # ===== 每 3 分钟检测 =====
+            sleep 180
         done
     ) &
 
-    echo "[OK] $(date '+%F %T') 备份系统已启动（cron + README触发）"
+    echo "[OK] $(date '+%F %T') 备份守护进程已启动（README + 定时）"
+else
+    echo "[WARN] $(date '+%F %T') GitHub 未配置，跳过备份系统"
 fi
 
 # =========================
