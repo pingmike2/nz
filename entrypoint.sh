@@ -349,7 +349,7 @@ else
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-*/10 * * * * /backup.sh >> /var/log/cron.log 2>&1
+0 4 * * * /backup.sh >> /var/log/cron.log 2>&1
 EOF
 
     # 安装 crontab
